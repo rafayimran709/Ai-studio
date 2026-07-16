@@ -396,7 +396,16 @@ export async function createGenerationHistory(
   storylineId: string | null,
   episodeId: string | null,
   prompt: string,
-  status: string = 'completed'
+  status: string = 'completed',
+  finalPrompt: string | null = null,
+  rawResponse: string | null = null,
+  variantA: Record<string, unknown> | null = null,
+  variantB: Record<string, unknown> | null = null,
+  model: string | null = null,
+  provider: string | null = null,
+  promptTokens: number | null = null,
+  completionTokens: number | null = null,
+  totalTokens: number | null = null
 ): Promise<DbGenerationHistory> {
   const { data, error } = await supabase
     .from('generation_history')
@@ -406,6 +415,15 @@ export async function createGenerationHistory(
       episode_id: episodeId || null,
       prompt,
       status,
+      final_prompt: finalPrompt,
+      raw_response: rawResponse,
+      variant_a: variantA,
+      variant_b: variantB,
+      model,
+      provider,
+      prompt_tokens: promptTokens,
+      completion_tokens: completionTokens,
+      total_tokens: totalTokens,
     })
     .select()
     .single();

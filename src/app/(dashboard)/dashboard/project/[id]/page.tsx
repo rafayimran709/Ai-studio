@@ -56,7 +56,9 @@ import {
   listGenerationHistoryAction,
   createGenerationHistoryAction,
   createEpisodeAction,
+  generateScriptAction,
 } from '@/app/actions';
+import type { ScriptVariant } from '@/lib/ai/types';
 
 // Options definitions
 const STYLES = [
@@ -79,6 +81,14 @@ const STYLES = [
 ];
 
 const DURATIONS = ['10s', '15s', '20s', '30s', '45s', '60s', '90s', '2min'];
+
+/** Generated script result for a single variant */
+interface GeneratedScripts {
+  variantA: ScriptVariant;
+  variantB: ScriptVariant;
+  model: string;
+  provider: string;
+}
 
 export default function ProjectWorkspace() {
   const {
@@ -109,6 +119,10 @@ export default function ProjectWorkspace() {
   const [hasGenerated, setHasGenerated] = React.useState(false);
   const [isExpandOpen, setIsExpandOpen] = React.useState(false);
   const [expandedVariant, setExpandedVariant] = React.useState<'A' | 'B'>('A');
+
+  // Real AI generation state
+  const [generatedScripts, setGeneratedScripts] =
+    React.useState<GeneratedScripts | null>(null);
 
   // React Query: Load data from Supabase
   const { data: projects = [] } = useQuery({
@@ -181,12 +195,61 @@ export default function ProjectWorkspace() {
     );
   };
 
-  // Generation DB commits
+  // Copy script text to clipboard
+  const handleCopy = async (text: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success(`${label} copied to clipboard!`);
+    } catch {
+      toast.error('Failed to copy to clipboard.');
+    }
+  };
+
+  // AI Generation mutation
   const generateMutation = useMutation({
     mutationFn: async () => {
-      if (!activeProjectId) return;
+      if (!activeProjectId) throw new Error('No active project selected.');
 
-      // 1. Create history record
+      // Build character data for the prompt
+      const charData = activeProjectCharacters
+        .filter((c) => selectedCharacters.includes(c.name))
+        .map((c) => ({
+          name: c.name,
+          appearance: c.appearance,
+          personality: c.personality ?? null,
+        }));
+
+      // Build story bible data
+      const bibleData = bible
+        ? {
+            worldSetting: bible.world_setting ?? null,
+            visualStyle: bible.visual_style ?? null,
+            narrativeTone: bible.narrative_tone ?? null,
+            writingRules: bible.writing_rules ?? null,
+            lore: bible.lore ?? null,
+          }
+        : null;
+
+      // Find selected template's system prompt
+      const tmpl = dbTemplates.find((t) => t.name === selectedTemplate);
+
+      // 1. Call the AI generation server action
+      const result = await generateScriptAction({
+        prompt: promptInput,
+        duration: selectedDuration,
+        style: selectedStyle,
+        template: tmpl?.system_prompt ?? null,
+        storyMode,
+        episodeNumber: storyMode === 'storyline' ? episodeNum : undefined,
+        characters: charData,
+        storyBible: bibleData,
+      });
+
+      if (!result.success) {
+        throw new Error(result.error);
+      }
+
+      // 2. Save generation history to Supabase with AI results
       await createGenerationHistoryAction({
         project_id: activeProjectId,
         storyline_id:
@@ -196,14 +259,22 @@ export default function ProjectWorkspace() {
         episode_id: null,
         prompt: promptInput,
         status: 'completed',
+        variant_a: result.variantA as unknown as Record<string, unknown>,
+        variant_b: result.variantB as unknown as Record<string, unknown>,
+        model: result.model,
+        provider: result.provider,
+        raw_response: result.rawResponse,
+        prompt_tokens: result.promptTokens,
+        completion_tokens: result.completionTokens,
+        total_tokens: result.totalTokens,
       });
 
-      // 2. Create episode if in storyline mode
+      // 3. Create episode if in storyline mode
       if (storyMode === 'storyline' && selectedStoryline) {
         await createEpisodeAction({
           storyline_id: selectedStoryline,
           episode_number: episodeNum,
-          title: `Episode ${episodeNum} draft`,
+          title: result.variantA.title,
           prompt: promptInput,
           duration: selectedDuration,
           style: selectedStyle,
@@ -211,8 +282,17 @@ export default function ProjectWorkspace() {
           status: 'draft',
         });
       }
+
+      return result;
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
+      if (!result) return;
+      setGeneratedScripts({
+        variantA: result.variantA,
+        variantB: result.variantB,
+        model: result.model,
+        provider: result.provider,
+      });
       refetchHistory();
       setIsGenerating(false);
       setHasGenerated(true);
@@ -220,7 +300,7 @@ export default function ProjectWorkspace() {
     },
     onError: (err: Error) => {
       setIsGenerating(false);
-      toast.error(`Generation failed: ${err.message}`);
+      toast.error(err.message || 'Generation failed. Please try again.');
     },
   });
 
@@ -231,76 +311,15 @@ export default function ProjectWorkspace() {
     }
     setIsGenerating(true);
     setHasGenerated(false);
-
-    // Simulate AI loading state with skeletons, then call database mutation
-    setTimeout(() => {
-      generateMutation.mutate();
-    }, 2000);
+    setGeneratedScripts(null);
+    generateMutation.mutate();
   };
 
-  // Mock script data
-  const mockScripts = {
-    A: {
-      title: 'Neon Mirage Chase',
-      mood: 'Suspenseful and hyper-stylized',
-      duration: selectedDuration || '30s',
-      cameraStyle:
-        'Anamorphic wide-angle lenses, tracking shots close to ground',
-      lightingStyle:
-        'Deep purple neon keylight, reflective wet asphalt downlight',
-      sceneCount: 3,
-      scenes: [
-        {
-          time: '00:00 - 00:10',
-          shot: 'Extreme Wide Shot',
-          action:
-            'Jax speeds through the narrow futuristic alleys on a hovering motorcycle. Heavy rain refracts the neon purple signs.',
-        },
-        {
-          time: '00:10 - 00:20',
-          shot: 'Close Up',
-          action:
-            "Jax's cybernetic left eye glows cyan as he checks his rear-view hologram mirror. Drones pursue.",
-        },
-        {
-          time: '00:20 - 00:30',
-          shot: 'Medium Action',
-          action:
-            'Jax makes a sharp turn around a structural column, leaving a trace of blue spark particles.',
-        },
-      ],
-    },
-    B: {
-      title: 'Grid Gate Breakout',
-      mood: 'Claustrophobic, industrial heist',
-      duration: selectedDuration || '30s',
-      cameraStyle:
-        'Handheld macro lenses, slow tracking shots from security camera angles',
-      lightingStyle:
-        'Emergency strobe pulse red keylight, dark background fields',
-      sceneCount: 3,
-      scenes: [
-        {
-          time: '00:00 - 00:10',
-          shot: 'Close Up Portrait',
-          action:
-            'Nova looks down from a dark air vent grating. Emergency white light strips flash.',
-        },
-        {
-          time: '00:10 - 00:20',
-          shot: 'Medium Tracking Shot',
-          action:
-            'Nova drops into the mainframe crawlspace, pulling out her silver cyberdeck.',
-        },
-        {
-          time: '00:20 - 00:30',
-          shot: 'Extreme Close Up',
-          action:
-            "Nova's fingers tap rapidly on a holographic keypad as pressure valves release steam.",
-        },
-      ],
-    },
-  };
+  // Helper to get the active variant data for rendering
+  const activeVariantData =
+    generatedScripts && expandedVariant === 'A'
+      ? generatedScripts.variantA
+      : (generatedScripts?.variantB ?? null);
 
   return (
     <div className="grid w-full grid-cols-1 lg:absolute lg:inset-0 lg:grid-cols-12 lg:overflow-hidden">
@@ -695,7 +714,7 @@ export default function ProjectWorkspace() {
                   <div className="h-20 rounded bg-zinc-900" />
                 </div>
               </div>
-            ) : hasGenerated ? (
+            ) : hasGenerated && generatedScripts ? (
               // Results Panel comparison view (Variant A & B side-by-side)
               <div className="space-y-6">
                 <div>
@@ -712,14 +731,14 @@ export default function ProjectWorkspace() {
                               VARIANT A
                             </span>
                             <h5 className="mt-1 text-base font-bold text-zinc-100">
-                              {mockScripts.A.title}
+                              {generatedScripts.variantA.title}
                             </h5>
                           </div>
                           <Badge
                             variant="outline"
                             className="border-zinc-800 text-[10px] text-zinc-400"
                           >
-                            Narrative
+                            {selectedStyle}
                           </Badge>
                         </div>
 
@@ -728,39 +747,31 @@ export default function ProjectWorkspace() {
                         <div className="space-y-3 text-xs leading-relaxed">
                           <div>
                             <span className="block text-[10px] font-medium text-zinc-500">
-                              Mood
+                              Summary
                             </span>
                             <p className="text-zinc-300">
-                              {mockScripts.A.mood}
+                              {generatedScripts.variantA.summary}
                             </p>
                           </div>
                           <div>
                             <span className="block text-[10px] font-medium text-zinc-500">
-                              Camera Style
+                              Script Preview
                             </span>
-                            <p className="text-zinc-300">
-                              {mockScripts.A.cameraStyle}
-                            </p>
-                          </div>
-                          <div>
-                            <span className="block text-[10px] font-medium text-zinc-500">
-                              Lighting Style
-                            </span>
-                            <p className="text-zinc-300">
-                              {mockScripts.A.lightingStyle}
+                            <p className="line-clamp-4 whitespace-pre-wrap text-zinc-400">
+                              {generatedScripts.variantA.fullScript}
                             </p>
                           </div>
                           <div className="grid grid-cols-2 gap-2 border-t border-zinc-900/60 pt-3 text-[10px] text-zinc-400">
                             <div>
                               <span>Duration:</span>{' '}
                               <span className="font-mono text-zinc-200">
-                                {mockScripts.A.duration}
+                                {generatedScripts.variantA.estimatedDuration}
                               </span>
                             </div>
                             <div>
-                              <span>Scenes:</span>{' '}
+                              <span>Model:</span>{' '}
                               <span className="font-mono text-zinc-200">
-                                {mockScripts.A.sceneCount}
+                                {generatedScripts.model.split('/').pop()}
                               </span>
                             </div>
                           </div>
@@ -769,13 +780,18 @@ export default function ProjectWorkspace() {
 
                       <div className="mt-5 flex items-center gap-2 border-t border-zinc-900 pt-4">
                         <Button
-                          disabled
+                          onClick={() =>
+                            handleCopy(
+                              generatedScripts.variantA.fullScript,
+                              'Variant A'
+                            )
+                          }
                           variant="ghost"
                           size="sm"
-                          className="flex-1 cursor-not-allowed border border-zinc-900 text-xs font-medium text-zinc-500"
+                          className="flex-1 border border-zinc-900 text-xs font-medium text-zinc-400 hover:text-white"
                         >
                           <Copy className="mr-1.5 h-3.5 w-3.5" />
-                          Copy (Disabled)
+                          Copy Script
                         </Button>
                         <Button
                           onClick={() => {
@@ -800,14 +816,14 @@ export default function ProjectWorkspace() {
                               VARIANT B
                             </span>
                             <h5 className="mt-1 text-base font-bold text-zinc-100">
-                              {mockScripts.B.title}
+                              {generatedScripts.variantB.title}
                             </h5>
                           </div>
                           <Badge
                             variant="outline"
                             className="border-zinc-800 text-[10px] text-zinc-400"
                           >
-                            Stylized Action
+                            {selectedStyle}
                           </Badge>
                         </div>
 
@@ -816,39 +832,31 @@ export default function ProjectWorkspace() {
                         <div className="space-y-3 text-xs leading-relaxed">
                           <div>
                             <span className="block text-[10px] font-medium text-zinc-500">
-                              Mood
+                              Summary
                             </span>
                             <p className="text-zinc-300">
-                              {mockScripts.B.mood}
+                              {generatedScripts.variantB.summary}
                             </p>
                           </div>
                           <div>
                             <span className="block text-[10px] font-medium text-zinc-500">
-                              Camera Style
+                              Script Preview
                             </span>
-                            <p className="text-zinc-300">
-                              {mockScripts.B.cameraStyle}
-                            </p>
-                          </div>
-                          <div>
-                            <span className="block text-[10px] font-medium text-zinc-500">
-                              Lighting Style
-                            </span>
-                            <p className="text-zinc-300">
-                              {mockScripts.B.lightingStyle}
+                            <p className="line-clamp-4 whitespace-pre-wrap text-zinc-400">
+                              {generatedScripts.variantB.fullScript}
                             </p>
                           </div>
                           <div className="grid grid-cols-2 gap-2 border-t border-zinc-900/60 pt-3 text-[10px] text-zinc-400">
                             <div>
                               <span>Duration:</span>{' '}
                               <span className="font-mono text-zinc-200">
-                                {mockScripts.B.duration}
+                                {generatedScripts.variantB.estimatedDuration}
                               </span>
                             </div>
                             <div>
-                              <span>Scenes:</span>{' '}
-                              <span className="font-mono text-zinc-200">
-                                {mockScripts.B.sceneCount}
+                              <span>Provider:</span>{' '}
+                              <span className="font-mono text-zinc-200 capitalize">
+                                {generatedScripts.provider}
                               </span>
                             </div>
                           </div>
@@ -857,13 +865,18 @@ export default function ProjectWorkspace() {
 
                       <div className="mt-5 flex items-center gap-2 border-t border-zinc-900 pt-4">
                         <Button
-                          disabled
+                          onClick={() =>
+                            handleCopy(
+                              generatedScripts.variantB.fullScript,
+                              'Variant B'
+                            )
+                          }
                           variant="ghost"
                           size="sm"
-                          className="flex-1 cursor-not-allowed border border-zinc-900 text-xs font-medium text-zinc-500"
+                          className="flex-1 border border-zinc-900 text-xs font-medium text-zinc-400 hover:text-white"
                         >
                           <Copy className="mr-1.5 h-3.5 w-3.5" />
-                          Copy (Disabled)
+                          Copy Script
                         </Button>
                         <Button
                           onClick={() => {
@@ -884,9 +897,12 @@ export default function ProjectWorkspace() {
                 <div className="flex gap-3 rounded-lg border border-zinc-900 bg-zinc-900/10 p-4 text-xs leading-relaxed text-zinc-400">
                   <AlertCircle className="h-5 w-5 shrink-0 text-zinc-500" />
                   <p>
-                    These previews represent structural visual scripts. Click
-                    the expand button to review time-coded scene scripts ready
-                    to import to Veo 3 or similar text-to-video systems.
+                    These are AI-generated Veo 3 scripts powered by{' '}
+                    <span className="font-semibold text-zinc-300 capitalize">
+                      {generatedScripts.provider}
+                    </span>
+                    . Click the expand button to review the full script, or copy
+                    it to import into Veo 3 or similar text-to-video systems.
                   </p>
                 </div>
               </div>
@@ -958,61 +974,73 @@ export default function ProjectWorkspace() {
           <DialogHeader className="border-b border-zinc-900 pb-4">
             <DialogTitle className="flex items-center gap-2 text-lg font-bold text-white">
               <Clapperboard className="h-4.5 w-4.5 text-zinc-400" />
-              <span>{mockScripts[expandedVariant].title}</span>
+              <span>{activeVariantData?.title ?? 'Script'}</span>
             </DialogTitle>
             <DialogDescription className="text-xs text-zinc-500">
-              Review scene breakdowns structured for text-to-video AI alignment.
+              Full Veo 3 production script — Variant {expandedVariant}. Ready to
+              import into text-to-video AI systems.
             </DialogDescription>
           </DialogHeader>
 
           <div className="max-h-[60vh] space-y-4 overflow-y-auto pt-4 pr-1 text-xs">
-            <div className="grid grid-cols-2 gap-4 rounded-lg border border-zinc-900 bg-zinc-900/10 p-3">
-              <div>
-                <span className="block text-[8px] font-bold tracking-wide text-zinc-500 uppercase">
-                  CAMERA METADATA
-                </span>
-                <span className="mt-1 block leading-relaxed font-medium text-zinc-300">
-                  {mockScripts[expandedVariant].cameraStyle}
-                </span>
-              </div>
-              <div>
-                <span className="block text-[8px] font-bold tracking-wide text-zinc-500 uppercase">
-                  LIGHTING METADATA
-                </span>
-                <span className="mt-1 block leading-relaxed font-medium text-zinc-300">
-                  {mockScripts[expandedVariant].lightingStyle}
-                </span>
-              </div>
-            </div>
+            {activeVariantData && (
+              <>
+                <div className="rounded-lg border border-zinc-900 bg-zinc-900/10 p-3">
+                  <span className="block text-[8px] font-bold tracking-wide text-zinc-500 uppercase">
+                    SUMMARY
+                  </span>
+                  <p className="mt-1 leading-relaxed text-zinc-300">
+                    {activeVariantData.summary}
+                  </p>
+                </div>
 
-            <div className="space-y-3">
-              <h4 className="font-sans text-[10px] font-bold tracking-wider text-zinc-500 uppercase">
-                Scene Breakdowns
-              </h4>
-              {mockScripts[expandedVariant].scenes.map((scene, idx) => (
-                <div
-                  key={idx}
-                  className="space-y-2 rounded-lg border border-zinc-900 bg-zinc-900/50 p-4"
-                >
-                  <div className="flex items-center justify-between text-[10px]">
-                    <span className="rounded border border-zinc-800 bg-zinc-900 px-2 py-0.5 font-mono font-bold text-zinc-300">
-                      {scene.time}
+                <div className="grid grid-cols-2 gap-4 rounded-lg border border-zinc-900 bg-zinc-900/10 p-3">
+                  <div>
+                    <span className="block text-[8px] font-bold tracking-wide text-zinc-500 uppercase">
+                      ESTIMATED DURATION
                     </span>
-                    <span className="font-bold tracking-wider text-zinc-500 uppercase">
-                      {scene.shot}
+                    <span className="mt-1 block font-mono font-medium text-zinc-300">
+                      {activeVariantData.estimatedDuration}
                     </span>
                   </div>
                   <div>
-                    <span className="block text-[8px] font-bold text-zinc-600 uppercase">
-                      VISUAL ACTIONS
+                    <span className="block text-[8px] font-bold tracking-wide text-zinc-500 uppercase">
+                      STYLE
                     </span>
-                    <p className="mt-1 font-sans leading-relaxed text-zinc-300">
-                      {scene.action}
-                    </p>
+                    <span className="mt-1 block font-medium text-zinc-300">
+                      {selectedStyle}
+                    </span>
                   </div>
                 </div>
-              ))}
-            </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-sans text-[10px] font-bold tracking-wider text-zinc-500 uppercase">
+                      Full Script
+                    </h4>
+                    <Button
+                      onClick={() =>
+                        handleCopy(
+                          activeVariantData.fullScript,
+                          `Variant ${expandedVariant}`
+                        )
+                      }
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 border border-zinc-800 px-2 text-[10px] text-zinc-400 hover:text-white"
+                    >
+                      <Copy className="mr-1 h-3 w-3" />
+                      Copy
+                    </Button>
+                  </div>
+                  <div className="rounded-lg border border-zinc-900 bg-zinc-900/50 p-4">
+                    <pre className="font-sans leading-relaxed whitespace-pre-wrap text-zinc-300">
+                      {activeVariantData.fullScript}
+                    </pre>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </DialogContent>
       </Dialog>

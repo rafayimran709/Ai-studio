@@ -311,6 +311,15 @@ export async function createGenerationHistoryAction(data: {
   episode_id?: string | null;
   prompt: string;
   status?: string;
+  final_prompt?: string | null;
+  raw_response?: string | null;
+  variant_a?: Record<string, unknown> | null;
+  variant_b?: Record<string, unknown> | null;
+  model?: string | null;
+  provider?: string | null;
+  prompt_tokens?: number | null;
+  completion_tokens?: number | null;
+  total_tokens?: number | null;
 }) {
   const validated = validateSchema<{
     project_id: string;
@@ -318,7 +327,13 @@ export async function createGenerationHistoryAction(data: {
     episode_id?: string | null;
     prompt: string;
     status?: string;
-  }>(schemas.generationHistorySchema, data);
+  }>(schemas.generationHistorySchema, {
+    project_id: data.project_id,
+    storyline_id: data.storyline_id,
+    episode_id: data.episode_id,
+    prompt: data.prompt,
+    status: data.status,
+  });
 
   const supabase = await createClient();
   return repo.createGenerationHistory(
@@ -327,6 +342,84 @@ export async function createGenerationHistoryAction(data: {
     validated.storyline_id || null,
     validated.episode_id || null,
     validated.prompt,
-    validated.status
+    validated.status,
+    data.final_prompt || null,
+    data.raw_response || null,
+    data.variant_a || null,
+    data.variant_b || null,
+    data.model || null,
+    data.provider || null,
+    data.prompt_tokens ?? null,
+    data.completion_tokens ?? null,
+    data.total_tokens ?? null
   );
+}
+
+// ==========================================
+// AI GENERATION ACTION
+// ==========================================
+export async function generateScriptAction(input: {
+  prompt: string;
+  duration: string;
+  style: string;
+  template: string | null;
+  storyMode: 'one-time' | 'storyline';
+  episodeNumber?: number;
+  characters: {
+    name: string;
+    appearance: string;
+    personality: string | null;
+  }[];
+  storyBible: {
+    worldSetting: string | null;
+    visualStyle: string | null;
+    narrativeTone: string | null;
+    writingRules: string | null;
+    lore: string | null;
+  } | null;
+}) {
+  const { generateScripts } = await import('@/lib/ai/ai-service');
+  const { AIError } = await import('@/lib/ai/types');
+
+  try {
+    const result = await generateScripts({
+      prompt: input.prompt,
+      duration: input.duration,
+      style: input.style,
+      template: input.template,
+      storyMode: input.storyMode,
+      episodeNumber: input.episodeNumber,
+      characters: input.characters,
+      storyBible: input.storyBible,
+    });
+
+    return {
+      success: true as const,
+      variantA: result.variantA,
+      variantB: result.variantB,
+      model: result.model,
+      provider: result.provider,
+      rawResponse: result.rawResponse,
+      promptTokens: result.promptTokens,
+      completionTokens: result.completionTokens,
+      totalTokens: result.totalTokens,
+    };
+  } catch (error: unknown) {
+    if (error instanceof AIError) {
+      console.error('AI Service Error:', error);
+      return {
+        success: false as const,
+        error: error.message,
+        code: error.code,
+      };
+    }
+
+    const message =
+      error instanceof Error ? error.message : 'An unexpected error occurred.';
+    return {
+      success: false as const,
+      error: message,
+      code: 'provider_error' as const,
+    };
+  }
 }

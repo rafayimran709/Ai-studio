@@ -65,6 +65,15 @@ export interface DbGenerationHistory {
   storyline_id: string | null;
   episode_id: string | null;
   prompt: string;
+  final_prompt: string | null;
+  raw_response: string | null;
+  variant_a: Record<string, unknown> | null;
+  variant_b: Record<string, unknown> | null;
+  model: string | null;
+  provider: string | null;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  total_tokens: number | null;
   status: string;
   created_at: string;
 }
