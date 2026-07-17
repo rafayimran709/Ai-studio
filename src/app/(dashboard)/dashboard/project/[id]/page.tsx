@@ -25,7 +25,6 @@ import {
 import {
   Film,
   Camera,
-  Copy,
   Video,
   Clapperboard,
   Sparkles,
@@ -44,9 +43,11 @@ import {
   Award,
   AlertCircle,
   History as HistoryIcon,
+  CheckCircle2,
+  Layers,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { useQuery, useMutation } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import {
   listTemplatesAction,
   listCharactersAction,
@@ -56,9 +57,19 @@ import {
   listGenerationHistoryAction,
   createGenerationHistoryAction,
   createEpisodeAction,
-  generateScriptAction,
+  updateEpisodeAction,
+  validateContinuityAction,
+  listStoryArcsAction,
+  listSeasonsAction,
+  listEpisodesAction,
 } from '@/app/actions';
 import type { ScriptVariant } from '@/lib/ai/types';
+import type {
+  DbGenerationHistory,
+  DbEpisode,
+  DbStoryArc,
+  DbSeason,
+} from '@/lib/database/types';
 
 // Options definitions
 const STYLES = [
@@ -123,6 +134,174 @@ export default function ProjectWorkspace() {
   // Real AI generation state
   const [generatedScripts, setGeneratedScripts] =
     React.useState<GeneratedScripts | null>(null);
+
+  // Streaming & Generation Stage States
+  const [generationStage, setGenerationStage] = React.useState<
+    | 'idle'
+    | 'preparing'
+    | 'connecting'
+    | 'generating_a'
+    | 'generating_b'
+    | 'finalizing'
+    | 'completed'
+    | 'cancelled'
+    | 'error'
+  >('idle');
+
+  const [streamVariantA, setStreamVariantA] = React.useState('');
+  const [streamVariantB, setStreamVariantB] = React.useState('');
+  const [variantAMeta, setVariantAMeta] = React.useState({
+    title: '',
+    summary: '',
+    estimatedDuration: '',
+  });
+  const [variantBMeta, setVariantBMeta] = React.useState({
+    title: '',
+    summary: '',
+    estimatedDuration: '',
+  });
+  const [errorMsg, setErrorMsg] = React.useState('');
+
+  // Milestone 5: Storyline Intelligence states
+  const [continuityWarnings, setContinuityWarnings] = React.useState<
+    Array<{
+      severity: 'warning' | 'info';
+      category: 'character' | 'location' | 'lore' | 'plot';
+      message: string;
+      suggestion?: string;
+    }>
+  >([]);
+  const [lastContinuityContext, setLastContinuityContext] = React.useState<
+    string | null
+  >(null);
+  const [isTimelineOpen, setIsTimelineOpen] = React.useState(false);
+  const [timelineEpisodes, setTimelineEpisodes] = React.useState<DbEpisode[]>(
+    []
+  );
+  const [timelineArcs, setTimelineArcs] = React.useState<DbStoryArc[]>([]);
+  const [timelineSeasons, setTimelineSeasons] = React.useState<DbSeason[]>([]);
+  const [isTimelineLoading, setIsTimelineLoading] = React.useState(false);
+
+  const abortControllerRef = React.useRef<AbortController | null>(null);
+  const bufferARef = React.useRef('');
+  const bufferBRef = React.useRef('');
+  const flushIntervalRef = React.useRef<NodeJS.Timeout | null>(null);
+
+  const startFlushTimer = () => {
+    if (flushIntervalRef.current) clearInterval(flushIntervalRef.current);
+    flushIntervalRef.current = setInterval(() => {
+      setStreamVariantA(bufferARef.current);
+      setStreamVariantB(bufferBRef.current);
+    }, 80);
+  };
+
+  const stopFlushTimer = () => {
+    if (flushIntervalRef.current) {
+      clearInterval(flushIntervalRef.current);
+      flushIntervalRef.current = null;
+    }
+    setStreamVariantA(bufferARef.current);
+    setStreamVariantB(bufferBRef.current);
+  };
+
+  // 1. Save draft on state updates
+  React.useEffect(() => {
+    if (activeProjectId) {
+      const draft = {
+        projectId: activeProjectId,
+        promptInput,
+        selectedDuration,
+        selectedStyle,
+        storyMode,
+        selectedTemplate,
+        selectedCharacters,
+        episodeNum,
+        generationStage,
+        streamVariantA,
+        streamVariantB,
+        variantAMeta,
+        variantBMeta,
+        generatedScripts,
+      };
+
+      if (generationStage !== 'idle' && generationStage !== 'completed') {
+        localStorage.setItem(
+          'ai_story_studio_draft_generation',
+          JSON.stringify(draft)
+        );
+      } else if (generationStage === 'completed') {
+        localStorage.removeItem('ai_story_studio_draft_generation');
+      }
+    }
+  }, [
+    activeProjectId,
+    promptInput,
+    selectedDuration,
+    selectedStyle,
+    storyMode,
+    selectedTemplate,
+    selectedCharacters,
+    episodeNum,
+    generationStage,
+    streamVariantA,
+    streamVariantB,
+    variantAMeta,
+    variantBMeta,
+    generatedScripts,
+  ]);
+
+  // 2. Load/Restore draft on project change or mount
+  React.useEffect(() => {
+    const savedDraft = localStorage.getItem('ai_story_studio_draft_generation');
+    if (savedDraft) {
+      try {
+        const draft = JSON.parse(savedDraft);
+        if (draft && draft.projectId === activeProjectId) {
+          setPromptInput(draft.promptInput || '');
+          setSelectedDuration(draft.selectedDuration || '30s');
+          setSelectedStyle(draft.selectedStyle || 'Cinematic');
+          setStoryMode(draft.storyMode || 'one-time');
+          setSelectedTemplate(draft.selectedTemplate || '');
+          setSelectedCharacters(draft.selectedCharacters || []);
+          setEpisodeNum(draft.episodeNum || 1);
+          setStreamVariantA(draft.streamVariantA || '');
+          setStreamVariantB(draft.streamVariantB || '');
+          setVariantAMeta(
+            draft.variantAMeta || {
+              title: '',
+              summary: '',
+              estimatedDuration: '',
+            }
+          );
+          setVariantBMeta(
+            draft.variantBMeta || {
+              title: '',
+              summary: '',
+              estimatedDuration: '',
+            }
+          );
+          setGeneratedScripts(draft.generatedScripts || null);
+
+          if (draft.generatedScripts) {
+            setHasGenerated(true);
+            setGenerationStage('completed');
+          } else if (
+            draft.generationStage !== 'idle' &&
+            draft.generationStage !== 'completed'
+          ) {
+            setGenerationStage('error');
+            setErrorMsg(
+              'The previous generation was interrupted. You can retry below.'
+            );
+            setHasGenerated(false);
+          }
+          toast.info('Restored your draft workspace state!');
+        }
+      } catch (e) {
+        console.error('Failed to restore draft:', e);
+      }
+    }
+  }, [activeProjectId, setPromptInput, setSelectedDuration, setSelectedStyle]);
 
   // React Query: Load data from Supabase
   const { data: projects = [] } = useQuery({
@@ -205,12 +384,203 @@ export default function ProjectWorkspace() {
     }
   };
 
-  // AI Generation mutation
-  const generateMutation = useMutation({
-    mutationFn: async () => {
-      if (!activeProjectId) throw new Error('No active project selected.');
+  const handleCopyVariant = (variant: ScriptVariant, label: string) => {
+    const text = `# ${variant.title}
+**Summary**: ${variant.summary}
+**Estimated Duration**: ${variant.estimatedDuration}
+**Style**: ${selectedStyle}
 
-      // Build character data for the prompt
+## Full Script
+${variant.fullScript}`;
+    handleCopy(text, label);
+  };
+
+  const saveHistoryBackground = async (result: {
+    variantA: ScriptVariant;
+    variantB: ScriptVariant;
+    model: string;
+    provider: string;
+    rawResponse: string;
+    episodeId?: string | null;
+    continuityContext?: string | null;
+  }) => {
+    if (!activeProjectId) return;
+    try {
+      // Invariant: Save style and metadata inside variant JSONB to avoid changing DB schema
+      const variantAWithMeta = {
+        ...result.variantA,
+        style: selectedStyle,
+      };
+      const variantBWithMeta = {
+        ...result.variantB,
+        style: selectedStyle,
+      };
+
+      await createGenerationHistoryAction({
+        project_id: activeProjectId,
+        storyline_id:
+          storyMode === 'storyline' && selectedStoryline
+            ? selectedStoryline
+            : null,
+        episode_id: null,
+        prompt: promptInput,
+        status: 'completed',
+        variant_a: variantAWithMeta as unknown as Record<string, unknown>,
+        variant_b: variantBWithMeta as unknown as Record<string, unknown>,
+        model: result.model,
+        provider: result.provider,
+        raw_response: result.rawResponse,
+      });
+
+      // For storylines, update the pre-created episode with the final title and set status to completed
+      if (storyMode === 'storyline' && selectedStoryline && result.episodeId) {
+        await updateEpisodeAction(result.episodeId, {
+          title: result.variantA.title,
+          prompt: promptInput,
+          duration: selectedDuration,
+          style: selectedStyle,
+          template: selectedTemplate || null,
+          status: 'completed',
+        });
+      }
+
+      refetchHistory();
+      toast.success('Generation history updated.');
+    } catch (err: unknown) {
+      console.error('Background history save failed:', err);
+      toast.error('Scripts generated, but failed to save history record.');
+    }
+  };
+
+  const handleSSEEvent = (event: string, data: string) => {
+    if (event === 'stage') {
+      setGenerationStage(data as typeof generationStage);
+    } else if (event === 'variant_a_delta') {
+      try {
+        const parsed = JSON.parse(data);
+        bufferARef.current += parsed.delta;
+      } catch {}
+    } else if (event === 'variant_b_delta') {
+      try {
+        const parsed = JSON.parse(data);
+        bufferBRef.current += parsed.delta;
+      } catch {}
+    } else if (event === 'variant_a_complete') {
+      try {
+        const meta = JSON.parse(data);
+        setVariantAMeta(meta);
+      } catch {}
+    } else if (event === 'variant_b_complete') {
+      try {
+        const meta = JSON.parse(data);
+        setVariantBMeta(meta);
+      } catch {}
+    } else if (event === 'complete') {
+      try {
+        const result = JSON.parse(data);
+        setGeneratedScripts({
+          variantA: result.variantA,
+          variantB: result.variantB,
+          model: result.model,
+          provider: result.provider,
+        });
+        setHasGenerated(true);
+        setIsGenerating(false);
+        setGenerationStage('completed');
+        toast.success('Veo 3 script variations generated successfully!');
+
+        // Milestone 5: Validate continuity if context was returned
+        if (result.continuityContext) {
+          setLastContinuityContext(result.continuityContext);
+          validateContinuityAction({
+            scriptText: result.variantA.fullScript,
+            continuityContext: result.continuityContext,
+          })
+            .then((warnings) => {
+              setContinuityWarnings(warnings);
+            })
+            .catch((err) => {
+              console.error('Continuity check failed:', err);
+            });
+        } else {
+          setLastContinuityContext(null);
+          setContinuityWarnings([]);
+        }
+
+        saveHistoryBackground(result);
+      } catch {}
+    } else if (event === 'error') {
+      try {
+        const parsed = JSON.parse(data);
+        setErrorMsg(parsed.message);
+      } catch {
+        setErrorMsg(data);
+      }
+      setGenerationStage('error');
+      setIsGenerating(false);
+    }
+  };
+
+  const handleGenerateStream = async (options?: {
+    regenerateMode?: 'A' | 'B';
+  }) => {
+    const regenMode = options?.regenerateMode || 'both';
+
+    if (!promptInput.trim()) {
+      toast.error('Please describe a story prompt first');
+      return;
+    }
+
+    if (isGenerating) {
+      toast.warning('A generation is already in progress.');
+      return;
+    }
+
+    setIsGenerating(true);
+    setHasGenerated(false);
+    setErrorMsg('');
+
+    // Setup buffers
+    if (regenMode === 'both') {
+      bufferARef.current = '';
+      bufferBRef.current = '';
+      setStreamVariantA('');
+      setStreamVariantB('');
+      setVariantAMeta({ title: '', summary: '', estimatedDuration: '' });
+      setVariantBMeta({ title: '', summary: '', estimatedDuration: '' });
+      setGeneratedScripts(null);
+    } else if (regenMode === 'A') {
+      bufferARef.current = '';
+      setStreamVariantA('');
+      setVariantAMeta({ title: '', summary: '', estimatedDuration: '' });
+      if (generatedScripts) {
+        bufferBRef.current = generatedScripts.variantB.fullScript;
+        setStreamVariantB(generatedScripts.variantB.fullScript);
+        setVariantBMeta({
+          title: generatedScripts.variantB.title,
+          summary: generatedScripts.variantB.summary,
+          estimatedDuration: generatedScripts.variantB.estimatedDuration,
+        });
+      }
+    } else if (regenMode === 'B') {
+      bufferBRef.current = '';
+      setStreamVariantB('');
+      setVariantBMeta({ title: '', summary: '', estimatedDuration: '' });
+      if (generatedScripts) {
+        bufferARef.current = generatedScripts.variantA.fullScript;
+        setStreamVariantA(generatedScripts.variantA.fullScript);
+        setVariantAMeta({
+          title: generatedScripts.variantA.title,
+          summary: generatedScripts.variantA.summary,
+          estimatedDuration: generatedScripts.variantA.estimatedDuration,
+        });
+      }
+    }
+
+    setGenerationStage('preparing');
+    abortControllerRef.current = new AbortController();
+
+    try {
       const charData = activeProjectCharacters
         .filter((c) => selectedCharacters.includes(c.name))
         .map((c) => ({
@@ -219,7 +589,6 @@ export default function ProjectWorkspace() {
           personality: c.personality ?? null,
         }));
 
-      // Build story bible data
       const bibleData = bible
         ? {
             worldSetting: bible.world_setting ?? null,
@@ -230,11 +599,28 @@ export default function ProjectWorkspace() {
           }
         : null;
 
-      // Find selected template's system prompt
       const tmpl = dbTemplates.find((t) => t.name === selectedTemplate);
 
-      // 1. Call the AI generation server action
-      const result = await generateScriptAction({
+      let episodeId: string | null = null;
+      if (storyMode === 'storyline' && selectedStoryline) {
+        try {
+          const ep = await createEpisodeAction({
+            storyline_id: selectedStoryline,
+            episode_number: episodeNum,
+            title: `Episode ${episodeNum} Draft`,
+            prompt: promptInput,
+            duration: selectedDuration,
+            style: selectedStyle,
+            template: selectedTemplate || null,
+            status: 'draft',
+          });
+          episodeId = ep.id;
+        } catch (err) {
+          console.error('Failed to create pre-generation episode:', err);
+        }
+      }
+
+      const requestBody = {
         prompt: promptInput,
         duration: selectedDuration,
         style: selectedStyle,
@@ -243,76 +629,190 @@ export default function ProjectWorkspace() {
         episodeNumber: storyMode === 'storyline' ? episodeNum : undefined,
         characters: charData,
         storyBible: bibleData,
-      });
-
-      if (!result.success) {
-        throw new Error(result.error);
-      }
-
-      // 2. Save generation history to Supabase with AI results
-      await createGenerationHistoryAction({
-        project_id: activeProjectId,
-        storyline_id:
-          storyMode === 'storyline' && selectedStoryline
-            ? selectedStoryline
+        regenerateMode: regenMode,
+        existingVariantA:
+          regenMode === 'B' && generatedScripts
+            ? generatedScripts.variantA
             : null,
-        episode_id: null,
-        prompt: promptInput,
-        status: 'completed',
-        variant_a: result.variantA as unknown as Record<string, unknown>,
-        variant_b: result.variantB as unknown as Record<string, unknown>,
-        model: result.model,
-        provider: result.provider,
-        raw_response: result.rawResponse,
-        prompt_tokens: result.promptTokens,
-        completion_tokens: result.completionTokens,
-        total_tokens: result.totalTokens,
+        existingVariantB:
+          regenMode === 'A' && generatedScripts
+            ? generatedScripts.variantB
+            : null,
+        projectId: activeProjectId,
+        storylineId: selectedStoryline,
+        episodeId,
+      };
+
+      setGenerationStage('connecting');
+
+      const response = await fetch('/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+        signal: abortControllerRef.current.signal,
       });
 
-      // 3. Create episode if in storyline mode
-      if (storyMode === 'storyline' && selectedStoryline) {
-        await createEpisodeAction({
-          storyline_id: selectedStoryline,
-          episode_number: episodeNum,
-          title: result.variantA.title,
-          prompt: promptInput,
-          duration: selectedDuration,
-          style: selectedStyle,
-          template: selectedTemplate || null,
-          status: 'draft',
-        });
+      if (!response.ok) {
+        const errorText = await response
+          .text()
+          .catch(() => 'Connection failed');
+        throw new Error(errorText || `API error (HTTP ${response.status})`);
       }
 
-      return result;
-    },
-    onSuccess: (result) => {
-      if (!result) return;
-      setGeneratedScripts({
-        variantA: result.variantA,
-        variantB: result.variantB,
-        model: result.model,
-        provider: result.provider,
-      });
-      refetchHistory();
-      setIsGenerating(false);
-      setHasGenerated(true);
-      toast.success('Veo 3 script variations generated successfully!');
-    },
-    onError: (err: Error) => {
-      setIsGenerating(false);
-      toast.error(err.message || 'Generation failed. Please try again.');
-    },
-  });
+      if (!response.body) {
+        throw new Error('API returned empty response body.');
+      }
 
-  const handleGenerate = () => {
-    if (!promptInput.trim()) {
-      toast.error('Please describe a story prompt first');
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let streamBuffer = '';
+
+      startFlushTimer();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        streamBuffer += decoder.decode(value, { stream: true });
+        const parts = streamBuffer.split('\n\n');
+        streamBuffer = parts.pop() || '';
+
+        for (const part of parts) {
+          const lines = part.split('\n');
+          let eventName = '';
+          let dataVal = '';
+
+          for (const line of lines) {
+            if (line.startsWith('event: ')) {
+              eventName = line.substring(7).trim();
+            } else if (line.startsWith('data: ')) {
+              dataVal = line.substring(6).trim();
+            }
+          }
+
+          if (eventName) {
+            handleSSEEvent(eventName, dataVal);
+          }
+        }
+      }
+
+      if (streamBuffer.trim()) {
+        const lines = streamBuffer.split('\n');
+        let eventName = '';
+        let dataVal = '';
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            eventName = line.substring(7).trim();
+          } else if (line.startsWith('data: ')) {
+            dataVal = line.substring(6).trim();
+          }
+        }
+        if (eventName) {
+          handleSSEEvent(eventName, dataVal);
+        }
+      }
+
+      stopFlushTimer();
+      abortControllerRef.current = null;
+    } catch (err: unknown) {
+      stopFlushTimer();
+      setIsGenerating(false);
+
+      const errorObj = err as Error;
+      if (
+        errorObj.name === 'AbortError' ||
+        abortControllerRef.current?.signal.aborted
+      ) {
+        setGenerationStage('cancelled');
+        toast.info('Generation cancelled. Partial output preserved.');
+      } else {
+        setGenerationStage('error');
+        setErrorMsg(errorObj.message || 'Generation failed.');
+        toast.error(errorObj.message || 'Generation failed.');
+      }
+    }
+  };
+
+  const handleCancel = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    stopFlushTimer();
+    setIsGenerating(false);
+    setGenerationStage('cancelled');
+    toast.info('Generation cancelled.');
+    localStorage.removeItem('ai_story_studio_draft_generation');
+  };
+
+  const handleReopenHistory = (item: DbGenerationHistory) => {
+    if (isGenerating) {
+      toast.warning('Cannot reopen history while generation is active.');
       return;
     }
-    setIsGenerating(true);
-    setHasGenerated(false);
-    setGeneratedScripts(null);
-    generateMutation.mutate();
+    setPromptInput(item.prompt || '');
+
+    const variantA = item.variant_a as unknown as ScriptVariant & {
+      style?: string;
+    };
+    const variantB = item.variant_b as unknown as ScriptVariant & {
+      style?: string;
+    };
+    const itemWithStyle = item as unknown as { style?: string };
+
+    if (variantA?.estimatedDuration) {
+      setSelectedDuration(variantA.estimatedDuration);
+    }
+    const restoredStyle =
+      variantA?.style || itemWithStyle.style || selectedStyle;
+    setSelectedStyle(restoredStyle);
+
+    if (variantA && variantB) {
+      setGeneratedScripts({
+        variantA,
+        variantB,
+        model: item.model || 'Unknown',
+        provider: item.provider || 'Unknown',
+      });
+      setStreamVariantA(variantA.fullScript || '');
+      setStreamVariantB(variantB.fullScript || '');
+      setVariantAMeta({
+        title: variantA.title || '',
+        summary: variantA.summary || '',
+        estimatedDuration: variantA.estimatedDuration || '',
+      });
+      setVariantBMeta({
+        title: variantB.title || '',
+        summary: variantB.summary || '',
+        estimatedDuration: variantB.estimatedDuration || '',
+      });
+      setHasGenerated(true);
+      setGenerationStage('completed');
+      toast.success('Reopened generation workspace.');
+    }
+  };
+
+  const handleOpenTimeline = async () => {
+    if (!selectedStoryline) {
+      toast.warning('Please select a storyline first.');
+      return;
+    }
+    setIsTimelineLoading(true);
+    setIsTimelineOpen(true);
+    try {
+      const [episodes, arcs, seasons] = await Promise.all([
+        listEpisodesAction(selectedStoryline),
+        listStoryArcsAction(selectedStoryline),
+        listSeasonsAction(selectedStoryline),
+      ]);
+      setTimelineEpisodes(episodes || []);
+      setTimelineArcs(arcs || []);
+      setTimelineSeasons(seasons || []);
+    } catch (err) {
+      console.error('Failed to load storyline timeline:', err);
+      toast.error('Failed to load storyline timeline.');
+    } finally {
+      setIsTimelineLoading(false);
+    }
   };
 
   // Helper to get the active variant data for rendering
@@ -543,10 +1043,11 @@ export default function ProjectWorkspace() {
                     </div>
                   </div>
                   <Button
-                    disabled
-                    className="mt-1 w-full cursor-not-allowed border border-zinc-800 bg-zinc-900 text-xs font-medium text-zinc-500"
+                    onClick={handleOpenTimeline}
+                    className="mt-1 w-full border border-zinc-800 bg-zinc-900 text-xs font-medium text-zinc-300 hover:bg-zinc-800 hover:text-white"
                   >
-                    Continue Story (Continuity Lock)
+                    <HistoryIcon className="mr-1 h-3.5 w-3.5" />
+                    <span>View Storyline Timeline</span>
                   </Button>
                 </div>
               )}
@@ -649,7 +1150,7 @@ export default function ProjectWorkspace() {
 
             {/* Large Generate Button */}
             <Button
-              onClick={handleGenerate}
+              onClick={() => handleGenerateStream()}
               disabled={isGenerating}
               className="flex h-11 w-full items-center justify-center gap-2 bg-white text-xs font-semibold text-black transition-all hover:bg-zinc-200"
             >
@@ -692,31 +1193,289 @@ export default function ProjectWorkspace() {
         {/* Scrollable Canvas Area */}
         <ScrollArea className="min-h-0 flex-1">
           <div className="p-6">
-            {isGenerating ? (
-              // Loading skeleton state
-              <div className="animate-pulse space-y-6">
-                <div className="h-10 w-48 rounded bg-zinc-900" />
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="h-32 space-y-3 rounded-lg bg-zinc-900 p-4">
-                    <div className="h-4 w-2/3 rounded bg-zinc-800" />
-                    <div className="h-3 w-1/2 rounded bg-zinc-800" />
-                    <div className="h-3 w-3/4 rounded bg-zinc-800" />
+            {generationStage !== 'idle' && generationStage !== 'completed' && (
+              <div className="space-y-6">
+                {/* Generation Stage Banner */}
+                <Card className="border-zinc-800 bg-zinc-900/20 p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      {generationStage !== 'error' &&
+                      generationStage !== 'cancelled' ? (
+                        <Loader2 className="h-4.5 w-4.5 animate-spin text-white" />
+                      ) : (
+                        <AlertCircle className="h-4.5 w-4.5 text-zinc-500" />
+                      )}
+                      <div className="space-y-1">
+                        <span className="text-[10px] font-bold tracking-widest text-zinc-500 uppercase">
+                          Current Stage
+                        </span>
+                        <h4 className="text-xs font-semibold text-zinc-200 capitalize">
+                          {generationStage.replace('_', ' ')}
+                        </h4>
+                      </div>
+                    </div>
+                    {generationStage !== 'error' &&
+                      generationStage !== 'cancelled' && (
+                        <Button
+                          onClick={handleCancel}
+                          variant="destructive"
+                          size="sm"
+                          className="h-8 border border-red-900/30 bg-red-950/40 text-[10px] font-bold tracking-wider text-red-400 uppercase hover:bg-red-950/80"
+                        >
+                          Cancel
+                        </Button>
+                      )}
                   </div>
-                  <div className="h-32 space-y-3 rounded-lg bg-zinc-900 p-4">
-                    <div className="h-4 w-2/3 rounded bg-zinc-800" />
-                    <div className="h-3 w-1/2 rounded bg-zinc-800" />
-                    <div className="h-3 w-3/4 rounded bg-zinc-800" />
-                  </div>
-                </div>
-                <div className="space-y-3">
-                  <div className="h-4 w-24 rounded bg-zinc-900" />
-                  <div className="h-20 rounded bg-zinc-900" />
-                  <div className="h-20 rounded bg-zinc-900" />
+                </Card>
+
+                {/* Error Banner with Retry */}
+                {generationStage === 'error' && (
+                  <Card className="space-y-3 border-red-950 bg-red-950/10 p-4">
+                    <div className="flex items-start gap-3 text-red-400">
+                      <AlertCircle className="h-5 w-5 shrink-0" />
+                      <div className="space-y-1">
+                        <h4 className="text-xs font-bold tracking-wider uppercase">
+                          Generation Failed
+                        </h4>
+                        <p className="text-xs leading-relaxed text-red-300">
+                          {errorMsg || 'An unexpected error occurred.'}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        onClick={() => handleGenerateStream()}
+                        className="h-8 bg-red-900 text-[10px] font-bold text-white uppercase hover:bg-red-800"
+                      >
+                        Retry
+                      </Button>
+                      <Button
+                        onClick={() => {
+                          setGenerationStage('idle');
+                          setStreamVariantA('');
+                          setStreamVariantB('');
+                          setVariantAMeta({
+                            title: '',
+                            summary: '',
+                            estimatedDuration: '',
+                          });
+                          setVariantBMeta({
+                            title: '',
+                            summary: '',
+                            estimatedDuration: '',
+                          });
+                          setGeneratedScripts(null);
+                          setHasGenerated(false);
+                        }}
+                        variant="ghost"
+                        className="h-8 border border-zinc-800 text-[10px] font-bold text-zinc-400 uppercase hover:text-white"
+                      >
+                        Dismiss
+                      </Button>
+                    </div>
+                  </Card>
+                )}
+
+                {/* Live Side-by-side stream matrices */}
+                <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+                  {/* Variant A Card */}
+                  <Card className="flex flex-col justify-between border-zinc-800 bg-zinc-900/30 p-5">
+                    <div className="space-y-4">
+                      <div>
+                        <span className="block text-[10px] font-bold tracking-wide text-zinc-500">
+                          VARIANT A
+                        </span>
+                        <h5 className="mt-1 text-sm font-bold text-zinc-100">
+                          {variantAMeta.title ||
+                            (generationStage === 'generating_a'
+                              ? 'Writing title...'
+                              : 'Waiting for Variant A...')}
+                        </h5>
+                      </div>
+
+                      <Separator className="bg-zinc-900" />
+
+                      <div className="space-y-3 text-xs leading-relaxed">
+                        <div>
+                          <span className="block text-[10px] font-medium text-zinc-500">
+                            Summary
+                          </span>
+                          <p className="text-zinc-300">
+                            {variantAMeta.summary ||
+                              (generationStage === 'generating_a'
+                                ? 'Writing summary...'
+                                : 'Waiting...')}
+                          </p>
+                        </div>
+                        <div>
+                          <span className="block text-[10px] font-medium text-zinc-500">
+                            Script Preview
+                          </span>
+                          <div className="max-h-[250px] overflow-y-auto rounded-lg border border-zinc-900/60 bg-zinc-950/40 p-3">
+                            {streamVariantA ? (
+                              <pre className="font-sans text-[11px] leading-relaxed whitespace-pre-wrap text-zinc-400">
+                                {streamVariantA}
+                                {generationStage === 'generating_a' && (
+                                  <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-white" />
+                                )}
+                              </pre>
+                            ) : (
+                              <div className="text-zinc-650 flex h-20 items-center justify-center text-[10px]">
+                                {generationStage === 'generating_a' ? (
+                                  <span className="flex items-center gap-1.5">
+                                    <Loader2 className="h-3 w-3 animate-spin" />{' '}
+                                    Writing...
+                                  </span>
+                                ) : (
+                                  'Waiting...'
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        {variantAMeta.estimatedDuration && (
+                          <div className="text-zinc-450 font-mono text-[10px]">
+                            <span>Duration:</span>{' '}
+                            <span className="text-zinc-300">
+                              {variantAMeta.estimatedDuration}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </Card>
+
+                  {/* Variant B Card */}
+                  <Card className="flex flex-col justify-between border-zinc-800 bg-zinc-900/30 p-5">
+                    <div className="space-y-4">
+                      <div>
+                        <span className="block text-[10px] font-bold tracking-wide text-zinc-500">
+                          VARIANT B
+                        </span>
+                        <h5 className="mt-1 text-sm font-bold text-zinc-100">
+                          {variantBMeta.title ||
+                            (generationStage === 'generating_b'
+                              ? 'Writing title...'
+                              : 'Waiting for Variant B...')}
+                        </h5>
+                      </div>
+
+                      <Separator className="bg-zinc-900" />
+
+                      <div className="space-y-3 text-xs leading-relaxed">
+                        <div>
+                          <span className="block text-[10px] font-medium text-zinc-500">
+                            Summary
+                          </span>
+                          <p className="text-zinc-300">
+                            {variantBMeta.summary ||
+                              (generationStage === 'generating_b'
+                                ? 'Writing summary...'
+                                : 'Waiting...')}
+                          </p>
+                        </div>
+                        <div>
+                          <span className="block text-[10px] font-medium text-zinc-500">
+                            Script Preview
+                          </span>
+                          <div className="max-h-[250px] overflow-y-auto rounded-lg border border-zinc-900/60 bg-zinc-950/40 p-3">
+                            {streamVariantB ? (
+                              <pre className="font-sans text-[11px] leading-relaxed whitespace-pre-wrap text-zinc-400">
+                                {streamVariantB}
+                                {generationStage === 'generating_b' && (
+                                  <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-white" />
+                                )}
+                              </pre>
+                            ) : (
+                              <div className="text-zinc-650 flex h-20 items-center justify-center text-[10px]">
+                                {generationStage === 'generating_b' ? (
+                                  <span className="flex items-center gap-1.5">
+                                    <Loader2 className="h-3 w-3 animate-spin" />{' '}
+                                    Writing...
+                                  </span>
+                                ) : (
+                                  'Waiting...'
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        {variantBMeta.estimatedDuration && (
+                          <div className="text-zinc-450 font-mono text-[10px]">
+                            <span>Duration:</span>{' '}
+                            <span className="text-zinc-300">
+                              {variantBMeta.estimatedDuration}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </Card>
                 </div>
               </div>
-            ) : hasGenerated && generatedScripts ? (
+            )}
+
+            {generationStage === 'completed' && generatedScripts ? (
               // Results Panel comparison view (Variant A & B side-by-side)
               <div className="space-y-6">
+                {/* Continuity Alerts Panel */}
+                {continuityWarnings.length > 0 ? (
+                  <Card className="animate-in fade-in slide-in-from-top-2 border-amber-900/60 bg-amber-950/20 p-4 duration-200">
+                    <div className="flex items-start gap-3">
+                      <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-amber-500" />
+                      <div className="w-full space-y-1">
+                        <h4 className="text-xs font-bold tracking-wider text-amber-400 uppercase">
+                          Continuity Inconsistencies Detected
+                        </h4>
+                        <p className="text-[11px] text-zinc-400">
+                          The script editor flagged the following contradictions
+                          against established story/character/location states:
+                        </p>
+                        <div className="mt-3 space-y-2">
+                          {continuityWarnings.map((warning, index) => (
+                            <div
+                              key={index}
+                              className="rounded border border-zinc-900 bg-zinc-950/60 p-2.5 text-xs text-zinc-300"
+                            >
+                              <div className="flex items-center justify-between">
+                                <span className="font-mono text-[10px] font-semibold tracking-wider text-amber-500 capitalize">
+                                  [{warning.category}] {warning.severity}
+                                </span>
+                              </div>
+                              <p className="mt-1 text-zinc-200">
+                                {warning.message}
+                              </p>
+                              {warning.suggestion && (
+                                <p className="mt-1 text-[11px] text-zinc-500">
+                                  <span className="font-semibold text-zinc-400">
+                                    Suggestion:
+                                  </span>{' '}
+                                  {warning.suggestion}
+                                </p>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </Card>
+                ) : (
+                  lastContinuityContext && (
+                    <Card className="animate-in fade-in slide-in-from-top-2 flex items-center gap-2.5 border-green-950/60 bg-green-950/15 p-3.5 text-xs text-green-400 duration-200">
+                      <CheckCircle2 className="h-4.5 w-4.5 shrink-0" />
+                      <div className="space-y-0.5">
+                        <p className="font-semibold text-green-300">
+                          Continuity Check Passed
+                        </p>
+                        <p className="text-[11px] text-zinc-500">
+                          All characters, locations, and lore facts are
+                          consistent with preceding episode memories.
+                        </p>
+                      </div>
+                    </Card>
+                  )
+                )}
+
                 <div>
                   <h4 className="mb-4 text-xs font-semibold tracking-wider text-zinc-500 uppercase">
                     Comparison Matrix
@@ -778,31 +1537,90 @@ export default function ProjectWorkspace() {
                         </div>
                       </div>
 
-                      <div className="mt-5 flex items-center gap-2 border-t border-zinc-900 pt-4">
+                      <div className="mt-5 space-y-3 border-t border-zinc-900 pt-4">
+                        {/* Copy tools bar */}
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <Button
+                            onClick={() =>
+                              handleCopyVariant(
+                                generatedScripts.variantA,
+                                'Variant A'
+                              )
+                            }
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 border border-zinc-900 text-[10px] font-medium text-zinc-400 hover:text-white"
+                          >
+                            Copy Variant
+                          </Button>
+                          <Button
+                            onClick={() =>
+                              handleCopy(
+                                generatedScripts.variantA.summary,
+                                'Summary A'
+                              )
+                            }
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 border border-zinc-900 text-[10px] font-medium text-zinc-400 hover:text-white"
+                          >
+                            Summary
+                          </Button>
+                          <Button
+                            onClick={() =>
+                              handleCopy(
+                                generatedScripts.variantA.fullScript,
+                                'Script A'
+                              )
+                            }
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 border border-zinc-900 text-[10px] font-medium text-zinc-400 hover:text-white"
+                          >
+                            Script
+                          </Button>
+                          <Button
+                            onClick={() =>
+                              handleCopy(
+                                JSON.stringify(
+                                  generatedScripts.variantA,
+                                  null,
+                                  2
+                                ),
+                                'Variant A JSON'
+                              )
+                            }
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 border border-zinc-900 text-[10px] font-medium text-zinc-400 hover:text-white"
+                          >
+                            JSON
+                          </Button>
+                          <Button
+                            onClick={() => {
+                              setExpandedVariant('A');
+                              setIsExpandOpen(true);
+                            }}
+                            variant="ghost"
+                            size="sm"
+                            className="ml-auto h-8 border border-zinc-900 px-3 text-xs font-medium text-zinc-400 hover:text-white"
+                          >
+                            <Maximize2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+
+                        {/* Regenerate card button */}
                         <Button
                           onClick={() =>
-                            handleCopy(
-                              generatedScripts.variantA.fullScript,
-                              'Variant A'
-                            )
+                            handleGenerateStream({ regenerateMode: 'A' })
                           }
-                          variant="ghost"
+                          disabled={isGenerating}
+                          variant="outline"
                           size="sm"
-                          className="flex-1 border border-zinc-900 text-xs font-medium text-zinc-400 hover:text-white"
+                          className="h-8 w-full border border-zinc-800 text-[10px] font-bold tracking-wider text-zinc-300 uppercase hover:bg-zinc-900"
                         >
-                          <Copy className="mr-1.5 h-3.5 w-3.5" />
-                          Copy Script
-                        </Button>
-                        <Button
-                          onClick={() => {
-                            setExpandedVariant('A');
-                            setIsExpandOpen(true);
-                          }}
-                          variant="ghost"
-                          size="sm"
-                          className="border border-zinc-900 px-3 text-xs font-medium text-zinc-400 hover:text-white"
-                        >
-                          <Maximize2 className="h-3.5 w-3.5" />
+                          <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+                          Regenerate Variant A Only
                         </Button>
                       </div>
                     </Card>
@@ -863,31 +1681,90 @@ export default function ProjectWorkspace() {
                         </div>
                       </div>
 
-                      <div className="mt-5 flex items-center gap-2 border-t border-zinc-900 pt-4">
+                      <div className="mt-5 space-y-3 border-t border-zinc-900 pt-4">
+                        {/* Copy tools bar */}
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <Button
+                            onClick={() =>
+                              handleCopyVariant(
+                                generatedScripts.variantB,
+                                'Variant B'
+                              )
+                            }
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 border border-zinc-900 text-[10px] font-medium text-zinc-400 hover:text-white"
+                          >
+                            Copy Variant
+                          </Button>
+                          <Button
+                            onClick={() =>
+                              handleCopy(
+                                generatedScripts.variantB.summary,
+                                'Summary B'
+                              )
+                            }
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 border border-zinc-900 text-[10px] font-medium text-zinc-400 hover:text-white"
+                          >
+                            Summary
+                          </Button>
+                          <Button
+                            onClick={() =>
+                              handleCopy(
+                                generatedScripts.variantB.fullScript,
+                                'Script B'
+                              )
+                            }
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 border border-zinc-900 text-[10px] font-medium text-zinc-400 hover:text-white"
+                          >
+                            Script
+                          </Button>
+                          <Button
+                            onClick={() =>
+                              handleCopy(
+                                JSON.stringify(
+                                  generatedScripts.variantB,
+                                  null,
+                                  2
+                                ),
+                                'Variant B JSON'
+                              )
+                            }
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 border border-zinc-900 text-[10px] font-medium text-zinc-400 hover:text-white"
+                          >
+                            JSON
+                          </Button>
+                          <Button
+                            onClick={() => {
+                              setExpandedVariant('B');
+                              setIsExpandOpen(true);
+                            }}
+                            variant="ghost"
+                            size="sm"
+                            className="ml-auto h-8 border border-zinc-900 px-3 text-xs font-medium text-zinc-400 hover:text-white"
+                          >
+                            <Maximize2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+
+                        {/* Regenerate B */}
                         <Button
                           onClick={() =>
-                            handleCopy(
-                              generatedScripts.variantB.fullScript,
-                              'Variant B'
-                            )
+                            handleGenerateStream({ regenerateMode: 'B' })
                           }
-                          variant="ghost"
+                          disabled={isGenerating}
+                          variant="outline"
                           size="sm"
-                          className="flex-1 border border-zinc-900 text-xs font-medium text-zinc-400 hover:text-white"
+                          className="h-8 w-full border border-zinc-800 text-[10px] font-bold tracking-wider text-zinc-300 uppercase hover:bg-zinc-900"
                         >
-                          <Copy className="mr-1.5 h-3.5 w-3.5" />
-                          Copy Script
-                        </Button>
-                        <Button
-                          onClick={() => {
-                            setExpandedVariant('B');
-                            setIsExpandOpen(true);
-                          }}
-                          variant="ghost"
-                          size="sm"
-                          className="border border-zinc-900 px-3 text-xs font-medium text-zinc-400 hover:text-white"
-                        >
-                          <Maximize2 className="h-3.5 w-3.5" />
+                          <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+                          Regenerate Variant B Only
                         </Button>
                       </div>
                     </Card>
@@ -900,13 +1777,18 @@ export default function ProjectWorkspace() {
                     These are AI-generated Veo 3 scripts powered by{' '}
                     <span className="font-semibold text-zinc-300 capitalize">
                       {generatedScripts.provider}
+                    </span>{' '}
+                    with model{' '}
+                    <span className="font-semibold text-zinc-300">
+                      {generatedScripts.model}
                     </span>
-                    . Click the expand button to review the full script, or copy
-                    it to import into Veo 3 or similar text-to-video systems.
+                    . Click expand to review full script or copy items.
                   </p>
                 </div>
               </div>
-            ) : (
+            ) : null}
+
+            {generationStage === 'idle' && (
               // Empty State
               <div className="flex h-[50vh] flex-col items-center justify-center p-8 text-center">
                 <Video className="mb-4 h-12 w-12 stroke-1 text-zinc-700" />
@@ -941,28 +1823,92 @@ export default function ProjectWorkspace() {
               Recent Generations
             </h4>
             {history.length === 0 ? (
-              <p className="py-8 text-center text-[10px] text-zinc-600">
+              <p className="text-zinc-655 py-8 text-center text-[10px]">
                 No generation history.
               </p>
             ) : (
-              history.map((item) => (
-                <Card
-                  key={item.id}
-                  className="cursor-pointer space-y-1.5 border-zinc-900/60 bg-zinc-900/10 p-3 transition-colors hover:bg-zinc-900/30"
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="truncate text-[10px] font-bold text-zinc-300">
-                      Generation Script
-                    </span>
-                    <span className="font-mono text-[8px] text-zinc-600">
-                      {new Date(item.created_at).toLocaleDateString()}
-                    </span>
-                  </div>
-                  <p className="line-clamp-2 text-[10px] leading-relaxed text-zinc-500">
-                    &quot;{item.prompt}&quot;
-                  </p>
-                </Card>
-              ))
+              history.map((item) => {
+                const displayTime = new Date(item.created_at).toLocaleString(
+                  undefined,
+                  {
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  }
+                );
+                const modelName = item.model
+                  ? item.model.split('/').pop()
+                  : 'N/A';
+
+                const variantA = item.variant_a as unknown as
+                  (ScriptVariant & { style?: string }) | null;
+                const itemWithStyle = item as unknown as { style?: string };
+
+                // Status Badge styling
+                let badgeClass = 'border-zinc-800 text-zinc-450 bg-zinc-950/20';
+                if (item.status === 'completed') {
+                  badgeClass =
+                    'border-green-950/60 text-green-400 bg-green-950/20';
+                } else if (item.status === 'failed') {
+                  badgeClass = 'border-red-950/60 text-red-400 bg-red-950/20';
+                } else if (
+                  item.status === 'generating' ||
+                  item.status === 'pending'
+                ) {
+                  badgeClass =
+                    'border-amber-950/60 text-amber-400 bg-amber-950/20';
+                }
+
+                return (
+                  <Card
+                    key={item.id}
+                    onClick={() => handleReopenHistory(item)}
+                    className="cursor-pointer space-y-2 border-zinc-900 bg-zinc-900/10 p-3 transition-colors hover:bg-zinc-900/20"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono text-[8px] text-zinc-500">
+                        {displayTime}
+                      </span>
+                      <Badge
+                        variant="outline"
+                        className={`px-1 py-0 text-[8px] ${badgeClass}`}
+                      >
+                        {item.status || 'completed'}
+                      </Badge>
+                    </div>
+                    <p className="line-clamp-2 text-[10px] leading-relaxed text-zinc-400">
+                      &quot;{item.prompt}&quot;
+                    </p>
+                    <div className="grid grid-cols-2 gap-x-2 gap-y-1 border-t border-zinc-900/60 pt-2 font-mono text-[9px] text-zinc-500">
+                      <div>
+                        <span>Duration:</span>{' '}
+                        <span className="text-zinc-350">
+                          {variantA?.estimatedDuration || 'N/A'}
+                        </span>
+                      </div>
+                      <div className="truncate">
+                        <span>Style:</span>{' '}
+                        <span className="text-zinc-350">
+                          {variantA?.style ||
+                            itemWithStyle.style ||
+                            selectedStyle}
+                        </span>
+                      </div>
+                      <div>
+                        <span>Provider:</span>{' '}
+                        <span className="text-zinc-355 capitalize">
+                          {item.provider || 'N/A'}
+                        </span>
+                      </div>
+                      <div className="truncate">
+                        <span>Model:</span>{' '}
+                        <span className="text-zinc-355">{modelName}</span>
+                      </div>
+                    </div>
+                  </Card>
+                );
+              })
             )}
           </div>
         </ScrollArea>
@@ -1018,20 +1964,54 @@ export default function ProjectWorkspace() {
                     <h4 className="font-sans text-[10px] font-bold tracking-wider text-zinc-500 uppercase">
                       Full Script
                     </h4>
-                    <Button
-                      onClick={() =>
-                        handleCopy(
-                          activeVariantData.fullScript,
-                          `Variant ${expandedVariant}`
-                        )
-                      }
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 border border-zinc-800 px-2 text-[10px] text-zinc-400 hover:text-white"
-                    >
-                      <Copy className="mr-1 h-3 w-3" />
-                      Copy
-                    </Button>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <Button
+                        onClick={() =>
+                          handleCopyVariant(
+                            activeVariantData,
+                            `Variant ${expandedVariant}`
+                          )
+                        }
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 border border-zinc-800 px-2 text-[10px] text-zinc-400 hover:text-white"
+                      >
+                        Copy Variant
+                      </Button>
+                      <Button
+                        onClick={() =>
+                          handleCopy(activeVariantData.summary, 'Summary')
+                        }
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 border border-zinc-800 px-2 text-[10px] text-zinc-400 hover:text-white"
+                      >
+                        Copy Summary
+                      </Button>
+                      <Button
+                        onClick={() =>
+                          handleCopy(activeVariantData.fullScript, 'Script')
+                        }
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 border border-zinc-800 px-2 text-[10px] text-zinc-400 hover:text-white"
+                      >
+                        Copy Script
+                      </Button>
+                      <Button
+                        onClick={() =>
+                          handleCopy(
+                            JSON.stringify(activeVariantData, null, 2),
+                            'JSON'
+                          )
+                        }
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 border border-zinc-800 px-2 text-[10px] text-zinc-400 hover:text-white"
+                      >
+                        Copy JSON
+                      </Button>
+                    </div>
                   </div>
                   <div className="rounded-lg border border-zinc-900 bg-zinc-900/50 p-4">
                     <pre className="font-sans leading-relaxed whitespace-pre-wrap text-zinc-300">
@@ -1042,6 +2022,116 @@ export default function ProjectWorkspace() {
               </>
             )}
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Storyline Timeline Dialog Modal */}
+      <Dialog open={isTimelineOpen} onOpenChange={setIsTimelineOpen}>
+        <DialogContent className="flex max-h-[85vh] max-w-3xl flex-col border-zinc-900 bg-zinc-950 text-zinc-100">
+          <DialogHeader className="border-b border-zinc-900 pb-4">
+            <DialogTitle className="flex items-center gap-2 text-lg font-bold text-white">
+              <Layers className="h-4.5 w-4.5 text-zinc-400" />
+              <span>Storyline Narrative Timeline</span>
+            </DialogTitle>
+            <DialogDescription className="text-xs text-zinc-500">
+              View chronological sequence of episode summaries, story arcs, and
+              seasons.
+            </DialogDescription>
+          </DialogHeader>
+
+          {isTimelineLoading ? (
+            <div className="flex flex-1 flex-col items-center justify-center gap-3 py-20">
+              <Loader2 className="h-6 w-6 animate-spin text-zinc-500" />
+              <span className="text-xs font-medium text-zinc-500">
+                Reading memory matrices...
+              </span>
+            </div>
+          ) : timelineEpisodes.length === 0 ? (
+            <div className="flex flex-1 flex-col items-center justify-center py-16 text-center">
+              <HistoryIcon className="mb-3 h-10 w-10 text-zinc-800" />
+              <h4 className="text-zinc-350 text-sm font-semibold">
+                Timeline Empty
+              </h4>
+              <p className="mt-1 max-w-sm text-xs text-zinc-600">
+                No completed episodes generated under this storyline yet.
+              </p>
+            </div>
+          ) : (
+            <ScrollArea className="min-h-0 flex-1 pr-2">
+              <div className="space-y-6 py-4">
+                {/* Render Season rollup summaries if available */}
+                {timelineSeasons.map((season) => (
+                  <div
+                    key={season.id}
+                    className="space-y-2 rounded-lg border border-green-950/40 bg-green-950/5 p-4"
+                  >
+                    <span className="text-[9px] font-bold tracking-widest text-green-400 uppercase">
+                      SEASON {season.season_number} ROLLUP
+                    </span>
+                    <h4 className="text-sm font-bold text-white">
+                      {season.title}
+                    </h4>
+                    <p className="text-zinc-350 text-xs leading-relaxed">
+                      {season.summary}
+                    </p>
+                  </div>
+                ))}
+
+                {/* Render Story Arc rollup summaries if available */}
+                {timelineArcs.map((arc) => (
+                  <div
+                    key={arc.id}
+                    className="space-y-2 rounded-lg border border-zinc-800 bg-zinc-900/10 p-4"
+                  >
+                    <span className="text-[9px] font-bold tracking-widest text-zinc-400 uppercase">
+                      STORY ARC {arc.arc_number} (Episodes {arc.start_episode}–
+                      {arc.end_episode})
+                    </span>
+                    <h4 className="text-sm font-bold text-zinc-200">
+                      {arc.title}
+                    </h4>
+                    <p className="text-xs leading-relaxed text-zinc-400">
+                      {arc.summary}
+                    </p>
+                  </div>
+                ))}
+
+                <Separator className="bg-zinc-900" />
+
+                <h4 className="text-[10px] font-bold tracking-widest text-zinc-500 uppercase">
+                  Chronological Episodes
+                </h4>
+
+                <div className="space-y-4">
+                  {timelineEpisodes.map((ep) => (
+                    <div
+                      key={ep.id}
+                      className="relative space-y-2 border-l border-zinc-900 pl-6"
+                    >
+                      <div className="absolute top-1 -left-1.5 h-3 w-3 rounded-full border border-zinc-800 bg-zinc-950" />
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-bold text-zinc-300">
+                          Episode {ep.episode_number}: {ep.title}
+                        </span>
+                        <span className="font-mono text-[10px] text-zinc-500 capitalize">
+                          Status: {ep.status}
+                        </span>
+                      </div>
+                      {ep.summary ? (
+                        <p className="text-xs leading-relaxed text-zinc-400">
+                          {ep.summary}
+                        </p>
+                      ) : (
+                        <p className="text-xs text-zinc-600 italic">
+                          No summary generated for this episode yet.
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </ScrollArea>
+          )}
         </DialogContent>
       </Dialog>
     </div>

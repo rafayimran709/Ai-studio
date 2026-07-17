@@ -423,3 +423,121 @@ export async function generateScriptAction(input: {
     };
   }
 }
+
+// ==========================================
+// STORYLINE INTELLIGENCE ENGINE ACTIONS
+// ==========================================
+
+export async function listCharacterStatesAction(projectId: string) {
+  const supabase = await createClient();
+  return repo.getCharacterStates(supabase, projectId);
+}
+
+export async function listLocationsAction(projectId: string) {
+  const supabase = await createClient();
+  return repo.getLocations(supabase, projectId);
+}
+
+export async function upsertLocationAction(data: {
+  project_id: string;
+  name: string;
+  appearance?: string | null;
+  atmosphere?: string | null;
+  weather?: string | null;
+  important_objects?: string[];
+  inhabitants?: string[];
+  lore?: string | null;
+  visual_style?: string | null;
+  first_episode_id?: string | null;
+}) {
+  const validated = validateSchema(schemas.locationSchema, data);
+  const supabase = await createClient();
+  return repo.upsertLocation(supabase, validated.project_id, validated.name, {
+    appearance: validated.appearance,
+    atmosphere: validated.atmosphere,
+    weather: validated.weather,
+    important_objects: validated.important_objects,
+    inhabitants: validated.inhabitants,
+    lore: validated.lore,
+    visual_style: validated.visual_style,
+    first_episode_id: validated.first_episode_id,
+  });
+}
+
+export async function listPlotThreadsAction(storylineId: string) {
+  const supabase = await createClient();
+  return repo.getPlotThreads(supabase, storylineId);
+}
+
+export async function listActivePlotThreadsAction(storylineId: string) {
+  const supabase = await createClient();
+  return repo.getActivePlotThreads(supabase, storylineId);
+}
+
+export async function listStoryArcsAction(storylineId: string) {
+  const supabase = await createClient();
+  return repo.getStoryArcs(supabase, storylineId);
+}
+
+export async function listSeasonsAction(storylineId: string) {
+  const supabase = await createClient();
+  return repo.getSeasons(supabase, storylineId);
+}
+
+export async function listLoreMemoriesAction(projectId: string) {
+  const supabase = await createClient();
+  return repo.getLoreMemories(supabase, projectId);
+}
+
+export async function buildContinuityContextAction(data: {
+  projectId: string;
+  storylineId: string;
+  episodeNumber: number;
+  promptText: string;
+}) {
+  const { buildContinuityContext } =
+    await import('@/lib/ai/continuity-builder');
+  const supabase = await createClient();
+  return buildContinuityContext(
+    supabase,
+    data.projectId,
+    data.storylineId,
+    data.episodeNumber,
+    data.promptText
+  );
+}
+
+export async function summarizeEpisodeAction(data: {
+  episodeId: string;
+  episodeNumber: number;
+  episodeTitle: string;
+  scriptText: string;
+  storylineId: string;
+  projectId: string;
+}) {
+  const { summarizeEpisode } = await import('@/lib/ai/summarizer');
+  const supabase = await createClient();
+  return summarizeEpisode(
+    supabase,
+    data.episodeId,
+    data.episodeNumber,
+    data.episodeTitle,
+    data.scriptText,
+    data.storylineId,
+    data.projectId
+  );
+}
+
+export async function maybeGenerateArcAction(storylineId: string) {
+  const { maybeGenerateArc } = await import('@/lib/ai/arc-generator');
+  const supabase = await createClient();
+  return maybeGenerateArc(supabase, storylineId);
+}
+
+export async function validateContinuityAction(data: {
+  scriptText: string;
+  continuityContext: string | null | undefined;
+}) {
+  const { validateContinuity } = await import('@/lib/ai/validator');
+  return validateContinuity(data.scriptText, data.continuityContext);
+}

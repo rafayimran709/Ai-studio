@@ -57,3 +57,24 @@ export async function generateScripts(
     totalTokens: providerResponse.totalTokens,
   };
 }
+
+export async function generateScriptsStream(
+  req: GenerateRequest,
+  signal?: AbortSignal
+): Promise<ReadableStream<string>> {
+  // 1. Validate configuration
+  const config = getAIConfig();
+
+  // 2. Build prompts
+  const { system, user } = buildPrompts(req);
+
+  // 3. Call the provider's generateStream through the interface
+  try {
+    return await activeProvider.generateStream(config, system, user, signal);
+  } catch (error: unknown) {
+    if (error instanceof AIError) throw error;
+    const message =
+      error instanceof Error ? error.message : 'Unknown provider error';
+    throw new AIError('provider_error', message);
+  }
+}

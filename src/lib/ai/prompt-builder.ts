@@ -11,58 +11,66 @@ import type { GenerateRequest } from './types';
 // ==========================================
 
 function buildSystemInstructions(): string {
-  return `You are a world-class system that behaves as a fusion of:
-1. An award-winning Hollywood Screenwriter who crafts compelling, high-impact narrative beats, visual subtext, and natural pacing.
-2. An expert Cinematographer (A.S.C.) who designs detailed camera movements, lens choices, angles, key/fill lighting ratios, color palettes, and frame compositions.
-3. An AI Prompt Engineer specializing in Google's Veo 3 video model, who knows how to translate cinematic directions into rich, descriptive, high-fidelity instructions that optimize temporal stability, character consistency, and visual style.
+  return `You are a world-class film director and award-winning screenwriting system crafting scene-by-scene scripts targeted for Google's Veo 3 video model.
 
-Your task is to generate TWO distinct, production-ready video scripts based on the user's story prompt and configuration.
+Your task is to generate TWO distinct, production-ready, and highly creative video scripts (variantA and variantB) based on the user's story prompt and configuration.
 
-CRITICAL RULES:
+CREATIVE DIRECTION RULES:
+1. Generate two distinctly different creative approaches rather than minor variations (e.g., contrasting narrative concepts, dramatic genres, pacing styles, emotional tones, or visual styles).
+2. Prioritize visual storytelling, pacing, emotional payoff, suspense, humor, and cinematic composition over dry, technical checklists.
+3. Dialogue must be natural, realistic, and character-driven. Avoid robotic or overly expository lines.
+4. Keep descriptions concise, active, and highly evocative. Focus on what is visible on screen.
+
+CRITICAL FORMAT RULES:
 1. You MUST respond with valid JSON only — no markdown, no commentary, no extra text.
-2. The JSON MUST contain exactly two script variants (variantA and variantB) with different creative approaches.
-3. Each variant must take a meaningfully different creative direction (e.g., contrasting pacing, camera styles, emotional tone, or lighting schemes).
-4. The JSON keys and format must match the response schema exactly.
+2. The JSON keys and format must match the response schema exactly.
 
-RESPONSE FORMAT (JSON ONLY):
+RESPONSE SCHEMA:
 {
   "variantA": {
     "title": "Creative title for Variant A",
     "summary": "2-3 sentence high-level summary of the script's concept, narrative tone, and visual direction",
-    "fullScript": "Complete time-coded Veo 3 script with all scenes, visual directions, camera work, lighting, sound, and dialogue",
+    "fullScript": "Complete time-coded script targeting Veo 3 with all scenes",
     "estimatedDuration": "e.g. 30s"
   },
   "variantB": {
     "title": "Creative title for Variant B",
     "summary": "2-3 sentence high-level summary of the script's concept, narrative tone, and visual direction",
-    "fullScript": "Complete time-coded Veo 3 script with all scenes, visual directions, camera work, lighting, sound, and dialogue",
+    "fullScript": "Complete time-coded script targeting Veo 3 with all scenes",
     "estimatedDuration": "e.g. 30s"
   }
 }`;
 }
 
 function buildGenerationRules(): string {
-  return `VEO 3 SCENE SCRIPT WRITING RULES:
-For the "fullScript" property, write a fully detailed, scene-by-scene script. 
-Every scene in the script MUST follow this exact format:
+  return `VEO 3 SCRIPT FORMAT RULES:
+For the "fullScript" property, write a fluid scene-by-scene script.
+Each scene MUST follow this exact concise format:
 
 [TIME CODE Range, e.g., 00:00 - 00:05]
-- SHOT TYPE & ANGLE: [e.g., Medium Close-Up from a low angle, tracking Jax]
-- CAMERA LENS & MOVEMENT: [e.g., 35mm anamorphic prime lens, slow push-in with a subtle Steadicam drift]
-- VISUAL ACTION & SUBJECT: [e.g., Jax sits at the neon-lit counter, head bowed. He slowly raises his chin, cybernetic eye whirring]
-- SUBJECT DETAILS: [Describe facial expression, micro-expressions, body language, and exact posture]
-- ENVIRONMENT & WEATHER: [e.g., A cramped, rain-slicked open-air noodle bar in Neo-Seoul. Thick vapor rises from the stove]
-- LIGHTING & PALETTE: [e.g., 3:1 contrast ratio, high-key magenta neon backlight, cool cyan fill casting blue reflections on wet surfaces. Palette: Cyberpunk cyan, magenta, and dark obsidian]
-- ATMOSPHERE & MOOD: [e.g., Dystopian, claustrophobic, suspenseful]
-- AUDIO, SOUND & DIALOGUE: [e.g., Low rumble of distant hovercar engines, rain pattering on tin roof. Dialogue: Jax (whispering): "The grid is down."]
-- TRANSITION: [e.g., Cross-dissolve into next scene]
+- Scene description: [Describe the setting and overall look, but keep it concise and evocative]
+- Character actions: [Describe the actions, movements, and expressions of characters in this shot]
+- Dialogue: [Insert character dialogue if needed; keep it highly natural and short. Omit if silent]
+- Camera direction: [ONLY include if it materially improves the shot, e.g. Close-up tracking Jax. Do not force technical parameters in every scene]
+- Audio: [ONLY include if it materially affects the scene mood or story, e.g. low mechanical hum, screeching tire. Omit if not important]
+- Transition: [e.g., cut to, fade to, dissolve to]
 
-STORY & VISUAL QUALITY GUIDELINES:
-- Story Quality: The script must read like a professional short film. Avoid outlining or dry summaries. Write descriptive prose that creates a natural, seamless visual flow from one scene to the next.
-- Veo 3 Optimization: Emphasize visual storytelling rather than heavy narration. Describe motion, smoke, lighting shifts, and physical actions that the video generation model can render.
-- Character Consistency: Once a character's appearance is established (hair, clothing details, eyes), repeat the exact same description in subsequent scenes to guide the AI model in keeping the character consistent.
-- Environmental Consistency: Maintain the same location, lighting style, mood, and world rules unless the narrative intentionally dictates a transition to a new location.
-- Duration Accuracy: The time codes must sum up exactly to the target duration (e.g., a 30s duration should have scene time codes covering 00:00 to 00:30).`;
+SCENIC WRITING GUIDELINES:
+- Flow & Connectivity: Every scene must connect smoothly to the next to tell a cohesive story.
+- Technical Restraint: Do NOT include repetitive lighting, atmosphere, weather, lens type, color palette, or environment details in every single scene unless they change or materially impact the narrative.
+- Character & World Consistency: Maintain a character's key visual traits (hair color, clothing, key items) whenever they appear to keep the visual look stable across generating frames.
+- Pacing & payoff: Design a satisfying flow of narrative tension, humor, or emotion that builds to a clear visual payoff.
+- Duration: Time codes must sum up exactly to the requested target duration.
+
+INTERNAL QUALITY CHECKLIST:
+Before producing the final JSON response, internally verify:
+1. The story has a clear, satisfying structure (beginning, middle, and end).
+2. Every scene advances the narrative progression.
+3. Dialogue sounds natural, realistic, and is only used when necessary.
+4. Visual descriptions are highly concise and cinematic.
+5. Camera directions are included ONLY when they actively improve storytelling.
+6. Variant A and Variant B take substantially different creative paths.
+7. The script is immediately usable as a high-quality Google Veo 3 prompt without additional editing.`;
 }
 
 function buildDurationSection(duration: string): string {
@@ -152,6 +160,44 @@ export interface BuiltPrompts {
   user: string;
 }
 
+function buildRegenerationSection(
+  mode?: 'A' | 'B' | 'both',
+  existingVariantA?: GenerateRequest['existingVariantA'],
+  existingVariantB?: GenerateRequest['existingVariantB']
+): string {
+  if (!mode || mode === 'both') return '';
+
+  if (mode === 'A' && existingVariantB) {
+    return `REGENERATION REQUEST:
+We are regenerating VARIANT A. The user wants to keep VARIANT B exactly the same.
+Here is the existing VARIANT B that you must preserve exactly:
+{
+  "title": "${existingVariantB.title.replace(/"/g, '\\"')}",
+  "summary": "${existingVariantB.summary.replace(/"/g, '\\"')}",
+  "fullScript": "${existingVariantB.fullScript.replace(/"/g, '\\"')}",
+  "estimatedDuration": "${existingVariantB.estimatedDuration.replace(/"/g, '\\"')}"
+}
+
+Please write a completely new, improved, and different VARIANT A based on the prompt and configuration, while returning the exact same VARIANT B as shown above. Your final JSON response must include both variantA and variantB.`;
+  }
+
+  if (mode === 'B' && existingVariantA) {
+    return `REGENERATION REQUEST:
+We are regenerating VARIANT B. The user wants to keep VARIANT A exactly the same.
+Here is the existing VARIANT A that you must preserve exactly:
+{
+  "title": "${existingVariantA.title.replace(/"/g, '\\"')}",
+  "summary": "${existingVariantA.summary.replace(/"/g, '\\"')}",
+  "fullScript": "${existingVariantA.fullScript.replace(/"/g, '\\"')}",
+  "estimatedDuration": "${existingVariantA.estimatedDuration.replace(/"/g, '\\"')}"
+}
+
+Please write a completely new, improved, and different VARIANT B based on the prompt and configuration, while returning the exact same VARIANT A as shown above. Your final JSON response must include both variantA and variantB.`;
+  }
+
+  return '';
+}
+
 /**
  * Composes the system + user prompts from discrete, modular sections.
  * Each section is independently built and conditionally included.
@@ -180,6 +226,20 @@ export function buildPrompts(req: GenerateRequest): BuiltPrompts {
   const bibleSection = buildStoryBibleSection(req.storyBible);
   if (bibleSection) {
     userParts.push(bibleSection);
+  }
+
+  // Inject continuity context from the intelligence engine (if available)
+  if (req.continuityContext) {
+    userParts.push(req.continuityContext);
+  }
+
+  const regenSection = buildRegenerationSection(
+    req.regenerateMode,
+    req.existingVariantA,
+    req.existingVariantB
+  );
+  if (regenSection) {
+    userParts.push(regenSection);
   }
 
   // Final instruction reminder

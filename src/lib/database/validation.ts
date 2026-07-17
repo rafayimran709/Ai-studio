@@ -71,3 +71,50 @@ export const generationHistorySchema = z.object({
   prompt: z.string().min(1, 'Prompt is required'),
   status: z.string().default('completed'),
 });
+
+// ==========================================
+// Milestone 5: Storyline Intelligence Engine
+// ==========================================
+
+export const characterStateSchema = z.object({
+  character_id: z.string().uuid('Invalid character ID'),
+  appearance: z.string().optional().nullable(),
+  clothing: z.string().optional().nullable(),
+  emotional_state: z.string().optional().nullable(),
+  location: z.string().optional().nullable(),
+  inventory: z.array(z.string()).default([]),
+  is_alive: z.boolean().default(true),
+  last_episode_id: z.string().uuid().optional().nullable(),
+});
+
+export const locationSchema = z.object({
+  project_id: z.string().uuid('Invalid project ID'),
+  name: z
+    .string()
+    .min(1, 'Location name is required')
+    .max(200, 'Location name must be under 200 characters'),
+  appearance: z.string().optional().nullable(),
+  atmosphere: z.string().optional().nullable(),
+  weather: z.string().optional().nullable(),
+  important_objects: z.array(z.string()).default([]),
+  inhabitants: z.array(z.string()).default([]),
+  lore: z.string().optional().nullable(),
+  visual_style: z.string().optional().nullable(),
+  first_episode_id: z.string().uuid().optional().nullable(),
+});
+
+export const loreMemorySchema = z.object({
+  project_id: z.string().uuid('Invalid project ID'),
+  episode_id: z.string().uuid().optional().nullable(),
+  topic: z.string().min(1, 'Topic is required'),
+  fact: z.string().min(1, 'Fact description is required'),
+  is_active: z.boolean().default(true),
+});
+
+export const plotThreadSchema = z.object({
+  storyline_id: z.string().uuid('Invalid storyline ID'),
+  introduced_episode_id: z.string().uuid().optional().nullable(),
+  resolved_episode_id: z.string().uuid().optional().nullable(),
+  description: z.string().min(1, 'Thread description is required'),
+  status: z.string().default('active'),
+});

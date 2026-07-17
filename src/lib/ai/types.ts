@@ -30,6 +30,11 @@ export interface GenerateRequest {
   episodeNumber?: number;
   characters: PromptCharacter[];
   storyBible: PromptStoryBible | null;
+  regenerateMode?: 'A' | 'B' | 'both';
+  existingVariantA?: ScriptVariant | null;
+  existingVariantB?: ScriptVariant | null;
+  /** Assembled continuity context from the intelligence engine */
+  continuityContext?: string | null;
 }
 
 // ==========================================
@@ -66,6 +71,8 @@ export interface GenerateResult {
   promptTokens: number | null;
   completionTokens: number | null;
   totalTokens: number | null;
+  episodeId?: string | null;
+  continuityContext?: string | null;
 }
 
 // ==========================================

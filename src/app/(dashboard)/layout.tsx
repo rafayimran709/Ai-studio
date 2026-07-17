@@ -87,6 +87,22 @@ export default function DashboardLayout({
     }
   }, [projects, activeProjectId, setActiveProject]);
 
+  // Synchronize activeProjectId from URL path (Milestone 5 dynamic ID fix)
+  React.useEffect(() => {
+    const match = pathname?.match(/\/dashboard\/project\/([^\/]+)/);
+    const urlProjectId = match?.[1];
+    if (
+      urlProjectId &&
+      urlProjectId !== 'storylines' &&
+      urlProjectId !== 'history' &&
+      urlProjectId !== 'templates' &&
+      urlProjectId !== 'billing' &&
+      urlProjectId !== activeProjectId
+    ) {
+      setActiveProject(urlProjectId);
+    }
+  }, [pathname, activeProjectId, setActiveProject]);
+
   const mainNavItems = [
     { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
     { name: 'Storylines', href: '/dashboard/storylines', icon: FolderOpen },

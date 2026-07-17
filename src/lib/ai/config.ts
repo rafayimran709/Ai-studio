@@ -6,7 +6,7 @@ export interface AIConfig {
   baseUrl: string;
 }
 
-const DEFAULT_MODEL = 'nvidia/llama-3.3-nemotron-super-49b-v1';
+const DEFAULT_MODEL = 'openai/gpt-oss-120b';
 const DEFAULT_BASE_URL = 'https://integrate.api.nvidia.com/v1';
 
 /**
